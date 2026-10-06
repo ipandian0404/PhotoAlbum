@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Task plan for modernizing PhotoAlbum to Azure App Service.",
+  "tasks": [
+    {
+      "type": "setupBaseline",
+      "id": "001-setupBaseline",
+      "description": "Capture a frozen test baseline for PhotoAlbum before modernization. Addresses assessment issues: none directly; record behavior for Local or network IO operations detected, Local application configuration detected, Connection string is detected, and SQL database connection detected.",
+      "reason": "A baseline allows storage and configuration changes to be verified against the current application behavior.",
+      "requirements": "Snapshot the PhotoAlbum source directory and capture existing gallery, upload, retrieval, deletion, and login behavior, plus the real/mock strategy for each external dependency. Do not modify application code.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "002-transform-photo-storage-blob",
+      "description": "Move photo uploads, reads, and deletes from local disk to Azure Blob Storage. Addresses assessment issue: Local or network IO operations detected.",
+      "reason": "Local filesystem persistence is not reliable across application instances, restarts, and deployments.",
+      "requirements": "Replace local photo-file persistence in PhotoAlbum/Services/PhotoService.cs and local reads in PhotoAlbum/Pages/PhotoFile.cshtml.cs with Azure Blob Storage while preserving the existing IPhotoService contract, validation, metadata, and failure cleanup behavior. Keep the photos container private and use managed identity. Update configuration and focused service tests. Assessment issue addressed: Local or network IO operations detected.",
+      "dependencies": [],
+      "skills": [
+        {
+          "name": "migration-azure-storage-blob",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "003-transform-sql-identity-configuration",
+      "description": "Use Azure SQL and managed identity, and externalize runtime configuration and secrets. Addresses assessment issues: Windows authentication detected, Local application configuration detected, Connection string is detected, SQL database connection detected, and Connection strings without configuration builders detected.",
+      "reason": "The current runtime configuration and legacy Web.config point to local SQL Server LocalDB and are not suitable as production Azure configuration.",
+      "requirements": "Configure PhotoAlbum/Program.cs and PhotoAlbum/appsettings.json to use Azure SQL Database with managed identity; remove the obsolete LocalDB connection from PhotoAlbum/Web.config; keep non-secret settings in the hosting configuration and retrieve the admin password from Azure Key Vault using managed identity. Preserve EF Core migrations and fail-closed admin authentication. Assessments addressed: Windows authentication detected, Local application configuration detected, Connection string is detected, SQL database connection detected, and Connection strings without configuration builders detected. Do not embed credentials or resource identifiers.",
+      "dependencies": [
+        "002-transform-photo-storage-blob"
+      ],
+      "skills": [
+        {
+          "name": "migration-azure-sql-database",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-azure-keyvault-secret",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "004-transform-azure-monitor",
+      "description": "Instrument the application for centralized Azure Monitor observability. Addresses assessment issues: none directly; adds operational visibility for the migrated services.",
+      "reason": "Centralized telemetry is needed to operate and troubleshoot the cloud-hosted application.",
+      "requirements": "Add OpenTelemetry-based traces, metrics, and logs for the ASP.NET Core application and configure export to Azure Monitor/Application Insights through deployment settings. Cover relevant application and database operations without logging passwords, connection strings, or sensitive photo content. Main files: PhotoAlbum/Program.cs and PhotoAlbum/PhotoAlbum.csproj. Assessment issues addressed: none directly.",
+      "dependencies": [
+        "003-transform-sql-identity-configuration"
+      ],
+      "skills": [
+        {
+          "name": "migration-opentelemetry-azure",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "integrationTest",
+      "id": "005-integrationTest",
+      "description": "Build integration tests for migrated Azure services and run post-migration verification",
+      "reason": "Verify migrated storage, database, authentication, and telemetry integration without requiring provisioned Azure resources.",
+      "requirements": "Use mocked dependencies as selected in the questionnaire. Verify photo upload/read/delete, SQL-backed photo metadata behavior, managed-identity configuration boundaries, and failure handling against the frozen baseline. Assessment issues verified: Local or network IO operations detected, Local application configuration detected, Connection string is detected, and SQL database connection detected.",
+      "dependencies": [
+        "001-setupBaseline",
+        "002-transform-photo-storage-blob",
+        "003-transform-sql-identity-configuration",
+        "004-transform-azure-monitor"
+      ]
+    },
+    {
+      "type": "security",
+      "id": "006-security-cve-secret-review",
+      "description": "Scan dependencies for CVEs and review application and infrastructure configuration for exposed secrets and excessive access. Revalidate the assessment's Hardcoded sensitive data detected finding, which was not confirmed in the cited Login.cshtml.cs code.",
+      "reason": "Resolve known dependency risks and verify that secrets and service permissions are handled safely before deployment.",
+      "requirements": "Scan project dependencies and remediate confirmed CVEs; document any unremediated findings and breaking-change risks. Review application settings, infra/main.bicep, and deployment configuration for credentials, public Blob access, and broad SQL firewall access. Ensure application access uses managed identity and Key Vault rather than embedded credentials. Assessment issue addressed: Hardcoded sensitive data detected (revalidate; the cited login code currently reads the password from configuration and fails closed when absent).",
+      "dependencies": [
+        "002-transform-photo-storage-blob",
+        "003-transform-sql-identity-configuration",
+        "004-transform-azure-monitor",
+        "005-integrationTest"
+      ],
+      "skills": [
+        {
+          "name": "validate-cves-and-fix",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "deployment",
+      "id": "007-deployment-appservice",
+      "description": "Deploy PhotoAlbum to Azure App Service with Azure SQL, private Blob Storage, Key Vault, managed identity, and Azure Monitor. Addresses assessment issue: Static content detected, by verifying the existing wwwroot assets in the hosted application.",
+      "reason": "App Service provides the requested simple managed hosting target and aligns with the project preference to avoid AKS.",
+      "requirements": "Adapt the existing Container Apps-focused deployment configuration in infra/, azure.yaml, Dockerfile, and AZURE_DEPLOYMENT.md for Azure App Service and the migrated service dependencies. Create/use App Service resources, configure managed identity and least-privilege access to Azure SQL, private Blob Storage, and Key Vault, and configure Azure Monitor. Verify wwwroot static assets, health, migration behavior, and a rollback path. Assessment issue addressed: Static content detected.",
+      "dependencies": [
+        "006-security-cve-secret-review"
+      ],
+      "targetAzureService": "appservice",
+      "resourceStatus": "Create App Service resources in place of the repository's current Container Apps hosting topology.",
+      "deploymentTool": "bicep",
+      "skills": [
+        {
+          "name": "azcli-appservice-deploy",
+          "location": "builtin"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "planName": "modernization-plan",
+    "projectName": "PhotoAlbum",
+    "language": "dotnet",
+    "createdAt": "2026-10-06T08:53:09Z",
+    "version": "1.0"
+  }
+}
