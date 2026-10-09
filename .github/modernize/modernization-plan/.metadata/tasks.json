@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Prioritized PhotoAlbum modernization tasks. Every description records the related assessment finding or states when no finding directly applies.",
+  "tasks": [
+    {
+      "type": "upgrade",
+      "id": "001-upgrade-dotnet",
+      "description": "Upgrade PhotoAlbum and its test project to .NET 10 LTS and update all NuGet packages to their latest stable compatible versions. Assessment issues: none directly; the assessment reports net9.0 and the runtime/package upgrade is explicitly requested.",
+      "reason": "Establish a current supported runtime and dependency baseline before Azure-service changes.",
+      "requirements": "Update the application and test projects, including EF Core, ImageSharp, test SDK, and test dependencies, to the latest stable compatible package versions. Resolve breaking changes and verify the solution builds and existing tests pass. Target net10.0.",
+      "skills": [],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": []
+    },
+    {
+      "type": "setupBaseline",
+      "id": "002-setup-baseline",
+      "description": "Capture the current PhotoAlbum test baseline before migration. Assessment coverage: Windows authentication detected; Local or network IO operations detected; Local application configuration detected; Connection string is detected; SQL database connection detected; Hardcoded sensitive data detected; Static content detected; Connection strings without configuration builders detected. This records verification coverage and does not itself remediate findings.",
+      "reason": "Preserve the application's current expected behavior for post-migration verification.",
+      "requirements": "Snapshot the main application source folder and record relevant existing behavior and test data before code or infrastructure changes.",
+      "snapshotFolder": "PhotoAlbum",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "003-transform-azure-sql",
+      "description": "Move photo metadata from local SQL Server/LocalDB configuration to Azure SQL Database using managed identity. Assessment issues: Local application configuration detected; Connection string is detected; SQL database connection detected; Connection strings without configuration builders detected.",
+      "reason": "The deployed Azure SQL resource is not the application's configured LocalDB backend.",
+      "requirements": "Use Azure SQL Database with Microsoft Entra managed identity authentication, preserve EF Core migrations and photo metadata, remove obsolete LocalDB/Web.config connection-string usage, and retain a safe local-development configuration. Update the SQL identity and configuration in the deployment setup as needed.",
+      "skills": [
+        {
+          "name": "migration-azure-sql-database",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "001-upgrade-dotnet"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "004-transform-blob-storage",
+      "description": "Replace local-disk photo storage and retrieval with Azure Blob Storage while preserving gallery behavior. Assessment issue: Local or network IO operations detected.",
+      "reason": "Local application storage is ephemeral and is not the Blob Storage resource already represented in the Azure deployment configuration.",
+      "requirements": "Use a private Blob Storage container with managed identity for upload, retrieval, and deletion. Preserve content validation, size limits, metadata, photo URLs, and failure consistency; define a safe migration approach for existing files and update affected service and file endpoint tests.",
+      "skills": [
+        {
+          "name": "migration-azure-storage-blob",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "003-transform-azure-sql"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "005-transform-key-vault-secrets",
+      "description": "Protect runtime administrator credentials with Azure Key Vault and managed identity. Assessment issue checked: Hardcoded sensitive data detected; the cited login code currently has no hard-coded password, so verify the finding while securing the configured admin password.",
+      "reason": "Runtime administrator credentials should not be stored in source-controlled application settings or deployment templates.",
+      "requirements": "Load the configured administrator secret from Key Vault through managed identity, avoid checked-in credentials and unsafe default credentials, and retain fail-closed login behavior. Review the assessment's cited Login.cshtml.cs lines and document any false-positive result.",
+      "skills": [
+        {
+          "name": "migration-azure-keyvault-secret",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "004-transform-blob-storage"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "006-transform-azure-monitor",
+      "description": "Add Azure Monitor and Application Insights observability for the modernized application. Assessment issues: none directly; this is an explicitly requested target-architecture capability.",
+      "reason": "Provide cloud-ready diagnostics across the application and Azure services.",
+      "requirements": "Instrument application traces, metrics, and logs with OpenTelemetry and Azure Monitor. Keep telemetry free of credentials and sensitive photo content, and preserve useful local logging.",
+      "skills": [
+        {
+          "name": "migration-opentelemetry-azure",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "005-transform-key-vault-secrets"
+      ]
+    },
+    {
+      "type": "integrationTest",
+      "id": "007-integrationTest",
+      "description": "Build integration tests for migrated Azure services and run post-migration verification. Assessment issues validated: Local or network IO operations detected; Local application configuration detected; Connection string is detected; SQL database connection detected; Connection strings without configuration builders detected.",
+      "reason": "Verify end-to-end behavior after the runtime and Azure service migrations.",
+      "requirements": "Use mocked Azure dependencies because no target test environment was provided. Verify photo upload/retrieval/deletion, SQL persistence, identity/configuration behavior, and application startup using the frozen baseline specification.",
+      "dependencies": [
+        "001-upgrade-dotnet",
+        "002-setup-baseline",
+        "003-transform-azure-sql",
+        "004-transform-blob-storage",
+        "005-transform-key-vault-secrets",
+        "006-transform-azure-monitor"
+      ]
+    },
+    {
+      "type": "security",
+      "id": "008-security-cve-review",
+      "description": "Scan dependencies for CVEs and remediate applicable vulnerabilities; review the assessment's credential findings and Azure resource exposure. Assessment issues reviewed: Hardcoded sensitive data detected; Windows authentication detected; Connection string is detected; SQL database connection detected.",
+      "reason": "Complete the required security and dependency vulnerability review before deployment.",
+      "requirements": "Scan application and test dependencies and remediate known vulnerabilities to patched compatible versions. Verify the reported hard-coded-sensitive-data and Windows-authentication findings against current source; do not treat unsupported findings as confirmed defects. Review Bicep for SQL administrator secret handling, ACR admin access, public storage/network exposure, and SQL firewall scope. Use least-privilege managed identities and verify the build and tests.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "001-upgrade-dotnet",
+        "003-transform-azure-sql",
+        "004-transform-blob-storage",
+        "005-transform-key-vault-secrets",
+        "006-transform-azure-monitor",
+        "007-integrationTest"
+      ]
+    },
+    {
+      "type": "deployment",
+      "id": "009-deploy-app-service",
+      "description": "Prepare and deploy PhotoAlbum to an approved Azure App Service environment, reconciling the current Container Apps configuration. Assessment issues validated at deployment: Local or network IO operations detected; Local application configuration detected; Static content detected.",
+      "reason": "Complete the requested end-to-end Azure modernization using the project's preferred simple App Service target.",
+      "requirements": "Target Azure App Service, not AKS. Reconcile infra/main.bicep and deployment configuration with the App Service target, managed identities, Azure SQL, private Blob Storage, Key Vault, and Azure Monitor. Preserve static assets and verify application health after deployment. Do not provision resources until the App Service environment, resource group, and region are approved.",
+      "targetAzureService": "appservice",
+      "resourceStatus": "Existing or newly approved App Service environment; details pending approval",
+      "deploymentTool": "bicep",
+      "skills": [
+        {
+          "name": "azcli-appservice-deploy",
+          "location": "builtin"
+        }
+      ],
+      "dependencies": [
+        "007-integrationTest",
+        "008-security-cve-review"
+      ]
+    }
+  ],
+  "metadata": {
+    "planName": "modernization-plan",
+    "projectName": "PhotoAlbum",
+    "language": "dotnet",
+    "createdAt": "2026-10-09T07:02:14Z",
+    "version": "1.0"
+  }
+}
