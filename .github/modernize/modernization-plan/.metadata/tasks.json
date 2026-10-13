@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Implementation roadmap for the PhotoAlbum Azure modernization plan. Assessment issue titles are included in each applicable task description.",
+  "tasks": [
+    {
+      "type": "upgrade",
+      "id": "001-upgrade-net10",
+      "description": "Upgrade PhotoAlbum and its test projects to .NET 10 and align framework dependencies. Addresses assessment issues: None; this task addresses the user's requested runtime upgrade.",
+      "reason": "The user explicitly requests a .NET 10 upgrade, and both application and test projects currently target net9.0.",
+      "requirements": "Target net10.0 in PhotoAlbum/PhotoAlbum.csproj and PhotoAlbum.Tests/PhotoAlbum.Tests.csproj; upgrade compatible EF Core and ASP.NET Core test dependencies to the .NET 10 line; verify ImageSharp and other packages remain supported; update Dockerfile SDK/runtime images if retained. Preserve application behavior and verify build and unit tests.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": []
+    },
+    {
+      "type": "setupBaseline",
+      "id": "002-setupBaseline",
+      "description": "Capture the current application behavior and freeze a test specification before Azure service transformations. Addresses assessment issues: None; this task establishes the verification baseline.",
+      "reason": "Integration verification is included using the questionnaire default, so baseline behavior and dependency test strategy must be recorded before migration.",
+      "requirements": "Snapshot the PhotoAlbum/ source directory. Record existing gallery, upload, photo retrieval, delete, and authorization behavior in the frozen baseline. Use mocked Azure dependencies because no provisioned Azure test environment was identified; record each dependency's real/mock decision in the baseline infra-decision-table.",
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "003-transform-appservice-hosting",
+      "description": "Align the hosting definition with the recommended Azure App Service target. Addresses assessment issues: None; the assessment did not report a hosting-platform defect.",
+      "reason": "The current deployment definition selects Container Apps, while the project's preferred target is a simpler App Service deployment.",
+      "requirements": "Update the hosting configuration to describe Azure App Service rather than Container Apps and remove or adapt Container Apps/ACR-specific settings. Review infra/main.bicep and azure.yaml for resource and deployment changes, and review Dockerfile usage against the selected App Service deployment method. This plan does not provision resources or deploy the application; confirm networking and existing-resource impacts before implementation.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "001-upgrade-net10"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "004-transform-blob-storage",
+      "description": "Move photo file persistence from local disk to private Azure Blob Storage. Addresses assessment issues: Local or network IO operations detected.",
+      "reason": "The current upload, retrieval, and deletion flows depend on instance-local files, while the existing Azure deployment already describes Blob Storage.",
+      "requirements": "Preserve photo upload validation, metadata, retrieval, and deletion behavior while replacing local filesystem persistence with Azure Blob Storage and managed identity. Review PhotoAlbum/Services/IPhotoService.cs, PhotoService.cs, PhotoAlbum/Pages/PhotoFile.cshtml.cs, PhotoAlbum/Program.cs, PhotoAlbum/appsettings.json, and infra/main.bicep. Define how existing local files are migrated and keep blob/database operations consistent. Keep the blob container private and use least-privilege data roles.",
+      "skills": [
+        {
+          "name": "migration-azure-storage-blob",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "003-transform-appservice-hosting"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "005-transform-azure-sql-and-configuration",
+      "description": "Connect the application to Azure SQL using managed identity and separate secrets from runtime settings. Addresses assessment issues: Local application configuration detected; Connection string is detected; SQL database connection detected; Connection strings without configuration builders detected.",
+      "reason": "The application configuration and legacy Web.config contain LocalDB settings, while the existing Azure design uses Azure SQL and a managed identity.",
+      "requirements": "Use Azure SQL Database with the existing EF data model and managed identity; remove stale LocalDB connection strings from deployed configuration and Web.config. Use Azure App Configuration for non-secret settings and Key Vault for any remaining secrets, accessed with managed identity. Review PhotoAlbum/Program.cs, PhotoAlbum/appsettings.json, PhotoAlbum/Web.config, infra/main.bicep, and scripts/configure-sql-user.*. Do not store credentials or connection strings in source control.",
+      "skills": [
+        {
+          "name": "migration-azure-sql-database",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-local-appsettings-azure-app-configuration",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-azure-keyvault-secret",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "004-transform-blob-storage"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "006-transform-entra-authentication",
+      "description": "Use Microsoft Entra ID to authenticate administrators who perform protected operations. Addresses assessment issues: None; the reported hardcoded-sensitive-data finding was not confirmed as a hardcoded password.",
+      "reason": "The current application has a single local admin sign-in flow; a managed identity does not replace end-user authentication.",
+      "requirements": "Replace or integrate the local admin login with Microsoft Entra ID authentication and preserve authorization for state-changing operations. Review PhotoAlbum/Program.cs, PhotoAlbum/Pages/Login.cshtml.cs, PhotoAlbum/Pages/Login.cshtml, and page handlers that perform protected actions. Do not treat the configured default username as a password finding; remove local credentials only as part of the supported identity migration.",
+      "skills": [
+        {
+          "name": "migration-microsoft-entra-id",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "005-transform-azure-sql-and-configuration"
+      ]
+    },
+    {
+      "type": "transform",
+      "id": "007-transform-azure-monitor",
+      "description": "Add application telemetry and operational monitoring through Azure Monitor. Addresses assessment issues: None; the assessment did not identify an observability finding.",
+      "reason": "Centralized telemetry and service health signals are needed to operate the modernized cloud application.",
+      "requirements": "Instrument application traces, metrics, and logs for Azure Monitor/Application Insights using OpenTelemetry. Review PhotoAlbum/Program.cs, PhotoAlbum/PhotoAlbum.csproj, and infra/main.bicep. Authenticate using managed identity where supported; do not commit instrumentation keys. Define useful failure and availability alerts.",
+      "skills": [
+        {
+          "name": "migration-opentelemetry-azure",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "006-transform-entra-authentication"
+      ]
+    },
+    {
+      "type": "security",
+      "id": "008-security-cve-remediation",
+      "description": "Scan project dependencies for known CVEs and remediate identified vulnerabilities before release. Addresses assessment issues: None; the assessment's hardcoded-sensitive-data finding was not confirmed as a hardcoded password.",
+      "reason": "Security and dependency vulnerability remediation is a required part of every modernization plan.",
+      "requirements": "Scan application and test dependencies after the .NET 10 and Azure transformations. Upgrade vulnerable dependencies to patched versions; document breaking changes for any required major upgrade; verify the build and tests. Review the current security-related deployment settings in infra/main.bicep, especially public networking, ACR admin access, and broad firewall rules, and recommend least-privilege replacements.",
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      },
+      "dependencies": [
+        "007-transform-azure-monitor"
+      ]
+    },
+    {
+      "type": "integrationTest",
+      "id": "009-integrationTest",
+      "description": "Build integration tests for migrated Azure services and run post-migration verification. Addresses assessment issues: Local or network IO operations detected; Local application configuration detected; Connection string is detected; SQL database connection detected; Connection strings without configuration builders detected.",
+      "reason": "Post-migration verification is included using the questionnaire's mock-mode default because no provisioned target environment was identified.",
+      "requirements": "Consume the frozen baseline and infra-decision-table from 002-setupBaseline. Verify migrated upload, retrieval, deletion, Azure SQL persistence, authentication/authorization, and configuration paths using mocked Azure dependencies. Exercise the affected application and test files, including PhotoAlbum.Tests/Unit/Services/PhotoServiceTests.cs, and report any behavior differences from baseline.",
+      "dependencies": [
+        "002-setupBaseline",
+        "001-upgrade-net10",
+        "003-transform-appservice-hosting",
+        "004-transform-blob-storage",
+        "005-transform-azure-sql-and-configuration",
+        "006-transform-entra-authentication",
+        "007-transform-azure-monitor",
+        "008-security-cve-remediation"
+      ]
+    }
+  ],
+  "metadata": {
+    "planName": "modernization-plan",
+    "projectName": "PhotoAlbum",
+    "language": "dotnet",
+    "createdAt": "2026-10-13T07:29:14Z",
+    "version": "1.0"
+  }
+}
