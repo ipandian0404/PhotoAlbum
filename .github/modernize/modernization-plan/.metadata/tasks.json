@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Review-only Azure modernization task plan for PhotoAlbum.",
+  "tasks": [
+    {
+      "type": "setupBaseline",
+      "id": "001-setupBaseline",
+      "description": "Capture current PhotoAlbum behavior and establish the frozen verification baseline.",
+      "reason": "A baseline allows migrated photo, database, and configuration behavior to be checked against the existing application.",
+      "requirements": "Snapshot the main application source at PhotoAlbum and document current photo upload, retrieval, deletion, and metadata behavior for later verification. Addresses assessment issues: none directly (baseline only).",
+      "snapshotFolder": "PhotoAlbum",
+      "dependencies": []
+    },
+    {
+      "type": "transform",
+      "id": "002-transform-local-photo-storage-to-azure-blob",
+      "description": "Move photo-file storage from the local filesystem to Azure Blob Storage.",
+      "reason": "Local files are not durable or shared across scaled application instances.",
+      "requirements": "Preserve the existing photo service behavior while storing and retrieving image objects from a private Blob container using managed identity. Keep database metadata and file operations consistent, and verify upload, retrieval, and deletion. Affected files: PhotoAlbum/Services/IPhotoService.cs, PhotoAlbum/Services/PhotoService.cs, PhotoAlbum/Pages/PhotoFile.cshtml.cs, PhotoAlbum/Program.cs, PhotoAlbum/PhotoAlbum.csproj. Addresses assessment issues: Local or network IO operations detected.",
+      "dependencies": [],
+      "skills": [
+        {
+          "name": "migration-azure-storage-blob",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "003-transform-localdb-to-azure-sql",
+      "description": "Move photo metadata persistence from LocalDB to Azure SQL Database.",
+      "reason": "LocalDB is unsuitable for a managed cloud application and the current connection string is machine-specific.",
+      "requirements": "Retain the EF Core data model and queries while connecting to Azure SQL with Microsoft Entra ID/managed identity. Define a controlled production schema migration process rather than requiring concurrent application instances to migrate the database on startup. Affected files: PhotoAlbum/Data/PhotoAlbumContext.cs, PhotoAlbum/Program.cs, PhotoAlbum/appsettings.json, PhotoAlbum/Migrations/. Addresses assessment issues: SQL database connection detected; Connection string is detected.",
+      "dependencies": [
+        "002-transform-local-photo-storage-to-azure-blob"
+      ],
+      "skills": [
+        {
+          "name": "migration-azure-sql-database",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "004-transform-cloud-configuration-and-secrets",
+      "description": "Externalize cloud application settings and protect required secrets.",
+      "reason": "Local configuration and legacy connection-string files should not define production service endpoints or credentials.",
+      "requirements": "Move non-secret settings to Azure App Configuration and any required sensitive values to Key Vault, accessed with managed identity. Retain the current fail-closed admin login behavior. Remove the stale Web.config LocalDB entry only after confirming it is not needed by the supported hosting path. Affected files: PhotoAlbum/Program.cs, PhotoAlbum/appsettings.json, PhotoAlbum/appsettings.Development.json, PhotoAlbum/Web.config, PhotoAlbum/Pages/Login.cshtml.cs. Addresses assessment issues: Local application configuration detected; Connection string is detected; Connection strings without configuration builders detected.",
+      "dependencies": [
+        "003-transform-localdb-to-azure-sql"
+      ],
+      "skills": [
+        {
+          "name": "migration-local-appsettings-azure-app-configuration",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-azure-keyvault-secret",
+          "location": "builtin"
+        },
+        {
+          "name": "migration-managed-identity",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "transform",
+      "id": "005-transform-azure-monitor-observability",
+      "description": "Instrument application telemetry for Azure Monitor.",
+      "reason": "Managed cloud hosting needs consistent operational logs, metrics, and traces.",
+      "requirements": "Add OpenTelemetry-based application instrumentation and configure export to Azure Monitor without logging credentials or sensitive photo metadata. Affected files: PhotoAlbum/Program.cs, PhotoAlbum/PhotoAlbum.csproj. Addresses assessment issues: none directly (proactive observability modernization).",
+      "dependencies": [
+        "004-transform-cloud-configuration-and-secrets"
+      ],
+      "skills": [
+        {
+          "name": "migration-opentelemetry-azure",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "security",
+      "id": "006-security-cve-and-configuration-review",
+      "description": "Scan dependencies for known CVEs and remediate verified security risks.",
+      "reason": "Known vulnerable dependencies and avoidable cloud resource exposure must be addressed before production rollout.",
+      "requirements": "Scan all PhotoAlbum and test project dependencies for CVEs and upgrade to patched versions, documenting major-version risks. Review the existing infrastructure configuration for secret-safe SQL bootstrap credentials, least-privilege identity roles, disabled ACR admin access when unnecessary, private Blob access, and restricted network exposure. Addresses assessment issues: none directly; the reported hardcoded sensitive data and Windows authentication findings were not confirmed in current files.",
+      "dependencies": [
+        "005-transform-azure-monitor-observability"
+      ],
+      "skills": [
+        {
+          "name": "validate-cves-and-fix",
+          "location": "builtin"
+        }
+      ],
+      "successCriteria": {
+        "passBuild": "true",
+        "passUnitTests": "true"
+      }
+    },
+    {
+      "type": "integrationTest",
+      "id": "007-integrationTest",
+      "description": "Build integration tests for migrated Azure services and run post-migration verification",
+      "reason": "Verify that the migrated service integrations preserve the baseline behavior.",
+      "requirements": "Use mocked external dependencies for post-migration verification; cover photo upload, retrieval, deletion, SQL-backed metadata, and application configuration. Addresses assessment issues: none directly (verification task for the confirmed local IO, configuration, and SQL findings).",
+      "dependencies": [
+        "001-setupBaseline",
+        "002-transform-local-photo-storage-to-azure-blob",
+        "003-transform-localdb-to-azure-sql",
+        "004-transform-cloud-configuration-and-secrets",
+        "005-transform-azure-monitor-observability"
+      ]
+    }
+  ],
+  "metadata": {
+    "planName": "modernization-plan",
+    "projectName": "PhotoAlbum",
+    "language": "dotnet",
+    "createdAt": "2026-11-06T06:56:31Z",
+    "version": "1.0"
+  }
+}
